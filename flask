@@ -1,0 +1,82 @@
+from flask import Flask, jsonify
+import requests
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
+app = Flask(__name__)
+
+# Configuration
+WINDOW_SIZE = 10  # Set the size of the sliding window
+BASE_URL = "http://20.244.56.144/test/"
+NUMBER_TYPES = {
+    'p': 'primes',        # Prime numbers
+    'f': 'fibonacci',     # Fibonacci numbers
+    'er': 'even',         # Even numbers
+    '1': 'random'         # Random numbers
+}
+
+# Global storage for the sliding window
+numbers_window = []
+
+@app.route('/numbers/<number_id>', methods=['GET'])
+def get_numbers(number_id):
+    """Handles GET requests for a specific number type."""
+    if number_id not in NUMBER_TYPES:
+        return jsonify({"error": "Invalid number type"}), 400
+    
+    # Capture the state of the window before fetching new numbers
+    prev_window_state = list(numbers_window)
+    
+    try:
+        # Fetch numbers from the third-party server
+        fetched_numbers = fetch_numbers_from_server(NUMBER_TYPES[number_id])
+        
+        # Add unique numbers to the sliding window
+        update_window_with_unique_numbers(fetched_numbers)
+        
+        # Calculate the average of the numbers in the current window
+        avg = calculate_average(numbers_window)
+        
+        # Prepare the response
+        response = {
+            "windowPrevState": prev_window_state,
+            "windowCurrState": list(numbers_window),
+            "numbers": fetched_numbers,
+            "avg": round(avg, 2) if numbers_window else 0
+        }
+        
+        return jsonify(response)
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def fetch_numbers_from_server(number_type):
+    """Fetch numbers from the third-party server with a timeout of 500 ms."""
+    url = BASE_URL + number_type
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(requests.get, url)
+        try:
+            result = future.result(timeout=0.5)
+            if result.status_code == 200:
+                return result.json().get('numbers', [])
+            else:
+                return []
+        except TimeoutError:
+            return []  # Handle timeout by returning an empty list
+        except Exception:
+            return []  # Handle any other errors by returning an empty list
+
+def update_window_with_unique_numbers(fetched_numbers):
+    """Update the sliding window with unique numbers from the fetched data."""
+    global numbers_window
+    for num in fetched_numbers:
+        if num not in numbers_window:
+            if len(numbers_window) >= WINDOW_SIZE:
+                numbers_window.pop(0)  # Remove the oldest number if the window is full
+            numbers_window.append(num)
+
+def calculate_average(numbers):
+    """Calculate the average of numbers in the list."""
+    return sum(numbers) / len(numbers) if numbers else 0
+
+if __name__ == '__main__':
+    app.run(port=9876)
